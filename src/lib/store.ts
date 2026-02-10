@@ -1,6 +1,8 @@
-import { kv } from "@vercel/kv";
+import { Redis } from "@upstash/redis";
 import { generateRoomCode, generateFileId, ROOM_TTL_MS } from "./utils";
 import { deleteBlob } from "./storage";
+
+const redis = Redis.fromEnv();
 
 export interface Room {
   code: string;
@@ -28,7 +30,7 @@ export async function createRoom(): Promise<Room> {
     code = generateRoomCode();
     attempts++;
     if (attempts > 10) throw new Error("Failed to generate unique room code");
-  } while (await kv.exists(`${KV_ROOM_PREFIX}${code}`));
+  } while (await redis.exists(`${KV_ROOM_PREFIX}${code}`));
 
   const now = Date.now();
   const ttlSeconds = Math.floor(ROOM_TTL_MS / 1000);
@@ -38,15 +40,16 @@ export async function createRoom(): Promise<Room> {
     expiresAt: now + ROOM_TTL_MS,
   };
 
-  await kv.set(`${KV_ROOM_PREFIX}${code}`, room, { ex: ttlSeconds });
-  await kv.set(`${KV_FILES_PREFIX}${code}`, [], { ex: ttlSeconds });
+  await redis.set(`${KV_ROOM_PREFIX}${code}`, JSON.stringify(room), { ex: ttlSeconds });
+  await redis.set(`${KV_FILES_PREFIX}${code}`, JSON.stringify([]), { ex: ttlSeconds });
   return room;
 }
 
 export async function getRoom(code: string): Promise<Room | null> {
   const upperCode = code.toUpperCase();
-  const room = await kv.get<Room>(`${KV_ROOM_PREFIX}${upperCode}`);
-  if (!room) return null;
+  const data = await redis.get(`${KV_ROOM_PREFIX}${upperCode}`);
+  if (!data) return null;
+  const room = JSON.parse(data as string) as Room;
   if (Date.now() > room.expiresAt) {
     await cleanupRoom(code);
     return null;
@@ -74,17 +77,19 @@ export async function addFile(
     expiresAt: room.expiresAt,
   };
 
-  const roomFiles = (await kv.get<FileEntry[]>(`${KV_FILES_PREFIX}${upperCode}`)) || [];
+  const data = await redis.get(`${KV_FILES_PREFIX}${upperCode}`);
+  const roomFiles = data ? (JSON.parse(data as string) as FileEntry[]) : [];
   roomFiles.push(entry);
 
   const ttlSeconds = Math.floor((room.expiresAt - Date.now()) / 1000);
-  await kv.set(`${KV_FILES_PREFIX}${upperCode}`, roomFiles, { ex: Math.max(ttlSeconds, 1) });
+  await redis.set(`${KV_FILES_PREFIX}${upperCode}`, JSON.stringify(roomFiles), { ex: Math.max(ttlSeconds, 1) });
   return entry;
 }
 
 export async function getFiles(roomCode: string): Promise<FileEntry[]> {
   const code = roomCode.toUpperCase();
-  const roomFiles = (await kv.get<FileEntry[]>(`${KV_FILES_PREFIX}${code}`)) || [];
+  const data = await redis.get(`${KV_FILES_PREFIX}${code}`);
+  const roomFiles = data ? (JSON.parse(data as string) as FileEntry[]) : [];
   const now = Date.now();
 
   const [active, expired] = roomFiles.reduce<[FileEntry[], FileEntry[]]>(
@@ -101,7 +106,7 @@ export async function getFiles(roomCode: string): Promise<FileEntry[]> {
     const room = await getRoom(code);
     if (room) {
       const ttlSeconds = Math.floor((room.expiresAt - Date.now()) / 1000);
-      await kv.set(`${KV_FILES_PREFIX}${code}`, active, { ex: Math.max(ttlSeconds, 1) });
+      await redis.set(`${KV_FILES_PREFIX}${code}`, JSON.stringify(active), { ex: Math.max(ttlSeconds, 1) });
     }
   }
 
@@ -115,7 +120,8 @@ export async function getFile(roomCode: string, fileId: string): Promise<FileEnt
 
 export async function deleteFile(roomCode: string, fileId: string): Promise<boolean> {
   const code = roomCode.toUpperCase();
-  const roomFiles = (await kv.get<FileEntry[]>(`${KV_FILES_PREFIX}${code}`)) || [];
+  const data = await redis.get(`${KV_FILES_PREFIX}${code}`);
+  const roomFiles = data ? (JSON.parse(data as string) as FileEntry[]) : [];
   const idx = roomFiles.findIndex((f) => f.id === fileId);
   if (idx === -1) return false;
 
@@ -125,7 +131,7 @@ export async function deleteFile(roomCode: string, fileId: string): Promise<bool
   const room = await getRoom(code);
   if (room) {
     const ttlSeconds = Math.floor((room.expiresAt - Date.now()) / 1000);
-    await kv.set(`${KV_FILES_PREFIX}${code}`, roomFiles, { ex: Math.max(ttlSeconds, 1) });
+    await redis.set(`${KV_FILES_PREFIX}${code}`, JSON.stringify(roomFiles), { ex: Math.max(ttlSeconds, 1) });
   }
 
   return true;
@@ -133,10 +139,11 @@ export async function deleteFile(roomCode: string, fileId: string): Promise<bool
 
 async function cleanupRoom(code: string) {
   const upperCode = code.toUpperCase();
-  const roomFiles = (await kv.get<FileEntry[]>(`${KV_FILES_PREFIX}${upperCode}`)) || [];
+  const data = await redis.get(`${KV_FILES_PREFIX}${upperCode}`);
+  const roomFiles = data ? (JSON.parse(data as string) as FileEntry[]) : [];
   for (const f of roomFiles) {
     deleteBlob(f.storagePath).catch(() => {});
   }
-  await kv.del(`${KV_ROOM_PREFIX}${upperCode}`);
-  await kv.del(`${KV_FILES_PREFIX}${upperCode}`);
+  await redis.del(`${KV_ROOM_PREFIX}${upperCode}`);
+  await redis.del(`${KV_FILES_PREFIX}${upperCode}`);
 }
