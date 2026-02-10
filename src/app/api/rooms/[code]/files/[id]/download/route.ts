@@ -7,7 +7,7 @@ export async function GET(
   { params }: { params: Promise<{ code: string; id: string }> }
 ) {
   const { code, id } = await params;
-  const file = getFile(code, id);
+  const file = await getFile(code, id);
   if (!file) {
     return NextResponse.json({ error: "File not found" }, { status: 404 });
   }

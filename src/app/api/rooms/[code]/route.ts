@@ -6,12 +6,13 @@ export async function GET(
   { params }: { params: Promise<{ code: string }> }
 ) {
   const { code } = await params;
-  const room = getRoom(code);
+  const room = await getRoom(code);
   if (!room) {
     return NextResponse.json({ error: "Room not found or expired" }, { status: 404 });
   }
 
-  const files = getFiles(code).map((f) => ({
+  const filesData = await getFiles(code);
+  const files = filesData.map((f) => ({
     id: f.id,
     filename: f.filename,
     size: f.size,

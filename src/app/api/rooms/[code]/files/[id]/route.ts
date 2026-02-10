@@ -6,7 +6,7 @@ export async function DELETE(
   { params }: { params: Promise<{ code: string; id: string }> }
 ) {
   const { code, id } = await params;
-  const deleted = deleteFile(code, id);
+  const deleted = await deleteFile(code, id);
   if (!deleted) {
     return NextResponse.json({ error: "File not found" }, { status: 404 });
   }

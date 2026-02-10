@@ -22,4 +22,4 @@ export function formatBytes(bytes: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 }
 
-export const ROOM_TTL_MS = 30 * 60 * 1000; // 30 minutes
+export const ROOM_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
